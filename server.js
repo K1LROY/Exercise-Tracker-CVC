@@ -1,130 +1,153 @@
 const express = require("express");
 const app = express();
-const bodyParser = require("body-parser");
-
 const cors = require("cors");
-
+const bodyParser = require("body-parser");
 const mongoose = require("mongoose");
-let uri =
-  "mongodb+srv://devilfang:1234@redux-study.jelsk.mongodb.net/ExerciseTracker?retryWrites=true&w=majority";
-mongoose.connect(uri, { useNewUrlParser: true, useUnifiedTopology: true });
+require("dotenv").config();
+
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json());
 
 app.use(cors());
-
 app.use(express.static("public"));
 app.get("/", (req, res) => {
   res.sendFile(__dirname + "/views/index.html");
 });
 
+mongoose.connect(
+  "mongodb+srv://devilfang:1234@redux-study.jelsk.mongodb.net/ExerciseTracker?retryWrites=true&w=majority",
+  {
+    useNewUrlParser: true,
+  }
+);
+const connection = mongoose.connection;
+connection.once("open", () => console.log("Connected!"));
+
+const exerciseSchema = new mongoose.Schema(
+  {
+    description: { type: String, required: true },
+    duration: { type: Number, required: true },
+    date: { type: String, required: true },
+  },
+  {
+    timestamps: false,
+    _id: false,
+  }
+);
+
+const Exercise = mongoose.model("Exercise", exerciseSchema);
+
+const userSchema = new mongoose.Schema(
+  {
+    username: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
+      minlength: 3,
+    },
+    log: { type: [exerciseSchema], required: false },
+  },
+  {
+    timestamps: false,
+    versionKey: false,
+  }
+);
+
+const User = mongoose.model("User", userSchema);
+
+app.get("/api/users", (req, res) => {
+  return User.find().then((users) => res.json(users));
+});
+
+app.post("/api/users", (req, res) => {
+  const { username } = req.body;
+
+  User.findOne({ username }).then((user) => {
+    if (user) return res.json(user);
+    else {
+      const newUser = new User({ username });
+
+      newUser.save().then(() => res.json(newUser));
+    }
+  });
+});
+
+app.post("/api/users/:_id/exercises", async (req, res) => {
+  let { description, duration, date } = req.body;
+  const id = req.params._id;
+
+  duration = parseInt(duration);
+
+  if (!date) {
+    date = new Date();
+  }
+  date = new Date(date);
+  date = date.toDateString();
+
+  if (id.match(/^[0-9a-fA-F]{24}$/)) {
+    let updated = await User.findOneAndUpdate(
+      { _id: id },
+      {
+        $push: {
+          log: {
+            date,
+            duration,
+            description,
+          },
+        },
+      }
+    ).exec();
+
+    let user = await User.findById(id).exec();
+
+    return res.json({
+      _id: user._id,
+      username: user.username,
+      date: date,
+      duration: duration,
+      description: description,
+    });
+  }
+});
+
+app.get("/api/users/:_id/logs", async (req, res) => {
+  const id = req.params._id;
+
+  const user = await User.findById(id).exec();
+  let { _id, username, log } = user;
+  const count = log.length;
+
+  let { from, to, limit } = req.query;
+
+  if (from) {
+    from = new Date(from);
+    log = log.filter((exercise) => new Date(exercise.date) >= from);
+  }
+
+  if (to) {
+    to = new Date(to);
+    log = log.filter((exercise) => new Date(exercise.date) <= to);
+  }
+
+  if (limit) {
+    log = log.slice(0, limit);
+  }
+
+  return res.json({
+    _id,
+    username,
+    log,
+    count,
+  });
+});
+
+app.get("/api/users/:_id/exercises", (req, res) => {
+  return User.findById(Object.values(req.body)[0]).then((user) =>
+    res.json(user)
+  );
+});
+
 const listener = app.listen(process.env.PORT || 3000, () => {
   console.log("Your app is listening on port " + listener.address().port);
-});
-
-let exerciseSessionSchema = new mongoose.Schema({
-  description: { type: String, required: true },
-  duration: { type: Number, required: true },
-  date: String,
-});
-
-let userSchema = new mongoose.Schema({
-  username: { type: String, required: true },
-  log: [exerciseSessionSchema],
-});
-
-let Session = mongoose.model("Session", exerciseSessionSchema);
-let User = mongoose.model("User", userSchema);
-
-app.post(
-  "/api/exercise/new-user",
-  bodyParser.urlencoded({ extended: false }),
-  (request, response) => {
-    let newUser = new User({ username: request.body.username });
-    newUser.save((error, savedUser) => {
-      if (!error) {
-        let responseObject = {};
-        responseObject["username"] = savedUser.username;
-        responseObject["_id"] = savedUser.id;
-        response.json(responseObject);
-      }
-    });
-  }
-);
-
-app.get("/api/exercise/users", (request, response) => {
-  User.find({}, (error, arrayOfUsers) => {
-    if (!error) {
-      response.json(arrayOfUsers);
-    }
-  });
-});
-
-app.post(
-  "/api/exercise/add",
-  bodyParser.urlencoded({ extended: false }),
-  (request, response) => {
-    let newSession = new Session({
-      description: request.body.description,
-      duration: parseInt(request.body.duration),
-      date: request.body.date,
-    });
-
-    if (newSession.date === "") {
-      newSession.date = new Date().toISOString().substring(0, 10);
-    }
-
-    User.findByIdAndUpdate(
-      request.body.userId,
-      { $push: { log: newSession } },
-      { new: true },
-      (error, updatedUser) => {
-        if (!error) {
-          let responseObject = {};
-          responseObject["_id"] = updatedUser.id;
-          responseObject["username"] = updatedUser.username;
-          responseObject["date"] = new Date(newSession.date).toDateString();
-          responseObject["description"] = newSession.description;
-          responseObject["duration"] = newSession.duration;
-          response.json(responseObject);
-        }
-      }
-    );
-  }
-);
-
-app.get("/api/exercise/log", (request, response) => {
-  User.findById(request.query.userId, (error, result) => {
-    if (!error) {
-      let responseObject = result;
-
-      if (request.query.from || request.query.to) {
-        let fromDate = new Date(0);
-        let toDate = new Date();
-
-        if (request.query.from) {
-          fromDate = new Date(request.query.from);
-        }
-
-        if (request.query.to) {
-          toDate = new Date(request.query.to);
-        }
-
-        fromDate = fromDate.getTime();
-        toDate = toDate.getTime();
-
-        responseObject.log = responseObject.log.filter((session) => {
-          let sessionDate = new Date(session.date).getTime();
-
-          return sessionDate >= fromDate && sessionDate <= toDate;
-        });
-      }
-
-      if (request.query.limit) {
-        responseObject.log = responseObject.log.slice(0, request.query.limit);
-      }
-
-      responseObject = responseObject.toJSON();
-      responseObject["count"] = result.log.length;
-      response.json(responseObject);
-    }
-  });
 });
